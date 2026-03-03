@@ -21,12 +21,13 @@ func NewProviderRepository(repo repository.ProviderRepository) *ProviderReposito
 }
 
 func (r *ProviderRepository) Load() error {
-	list, err := r.repo.List()
+	list, err := r.repo.List(domain.TenantIDAll)
 	if err != nil {
 		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.cache = make(map[uint64]*domain.Provider, len(list))
 	for _, p := range list {
 		r.cache[p.ID] = p
 	}
@@ -53,8 +54,8 @@ func (r *ProviderRepository) Update(p *domain.Provider) error {
 	return nil
 }
 
-func (r *ProviderRepository) Delete(id uint64) error {
-	if err := r.repo.Delete(id); err != nil {
+func (r *ProviderRepository) Delete(tenantID uint64, id uint64) error {
+	if err := r.repo.Delete(tenantID, id); err != nil {
 		return err
 	}
 	// 软删除：从缓存中移除（List 不会返回已删除的 provider）
@@ -65,22 +66,24 @@ func (r *ProviderRepository) Delete(id uint64) error {
 	return nil
 }
 
-func (r *ProviderRepository) GetByID(id uint64) (*domain.Provider, error) {
+func (r *ProviderRepository) GetByID(tenantID uint64, id uint64) (*domain.Provider, error) {
 	r.mu.RLock()
-	if p, ok := r.cache[id]; ok {
+	if p, ok := r.cache[id]; ok && (tenantID == domain.TenantIDAll || p.TenantID == tenantID) {
 		r.mu.RUnlock()
 		return p, nil
 	}
 	r.mu.RUnlock()
-	return r.repo.GetByID(id)
+	return r.repo.GetByID(tenantID, id)
 }
 
-func (r *ProviderRepository) List() ([]*domain.Provider, error) {
+func (r *ProviderRepository) List(tenantID uint64) ([]*domain.Provider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	list := make([]*domain.Provider, 0, len(r.cache))
 	for _, p := range r.cache {
-		list = append(list, p)
+		if tenantID == domain.TenantIDAll || p.TenantID == tenantID {
+			list = append(list, p)
+		}
 	}
 	return list, nil
 }

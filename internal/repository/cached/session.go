@@ -8,17 +8,22 @@ import (
 	"github.com/awsl-project/maxx/internal/repository"
 )
 
+type sessionCacheKey struct {
+	TenantID  uint64
+	SessionID string
+}
+
 // SessionRepository caches session records around a backing repository.
 type SessionRepository struct {
 	repo  repository.SessionRepository
-	cache map[string]*domain.Session
+	cache map[sessionCacheKey]*domain.Session
 	mu    sync.RWMutex
 }
 
 func NewSessionRepository(repo repository.SessionRepository) *SessionRepository {
 	return &SessionRepository{
 		repo:  repo,
-		cache: make(map[string]*domain.Session),
+		cache: make(map[sessionCacheKey]*domain.Session),
 	}
 }
 
@@ -27,7 +32,7 @@ func (r *SessionRepository) Create(s *domain.Session) error {
 		return err
 	}
 	r.mu.Lock()
-	r.cache[s.SessionID] = s
+	r.cache[sessionCacheKey{TenantID: s.TenantID, SessionID: s.SessionID}] = s
 	r.mu.Unlock()
 	return nil
 }
@@ -37,42 +42,56 @@ func (r *SessionRepository) Update(s *domain.Session) error {
 		return err
 	}
 	r.mu.Lock()
-	r.cache[s.SessionID] = s
+	r.cache[sessionCacheKey{TenantID: s.TenantID, SessionID: s.SessionID}] = s
 	r.mu.Unlock()
 	return nil
 }
 
-func (r *SessionRepository) GetBySessionID(sessionID string) (*domain.Session, error) {
+func (r *SessionRepository) GetBySessionID(tenantID uint64, sessionID string) (*domain.Session, error) {
 	r.mu.RLock()
-	if s, ok := r.cache[sessionID]; ok {
+	if tenantID == domain.TenantIDAll {
+		for key, s := range r.cache {
+			if key.SessionID == sessionID {
+				r.mu.RUnlock()
+				return s, nil
+			}
+		}
+	} else if s, ok := r.cache[sessionCacheKey{TenantID: tenantID, SessionID: sessionID}]; ok {
 		r.mu.RUnlock()
 		return s, nil
 	}
 	r.mu.RUnlock()
 
-	s, err := r.repo.GetBySessionID(sessionID)
+	s, err := r.repo.GetBySessionID(tenantID, sessionID)
 	if err != nil {
 		return nil, err
 	}
 
 	r.mu.Lock()
-	r.cache[sessionID] = s
+	r.cache[sessionCacheKey{TenantID: s.TenantID, SessionID: s.SessionID}] = s
 	r.mu.Unlock()
 	return s, nil
 }
 
-func (r *SessionRepository) GetOrCreate(sessionID string, clientType domain.ClientType) (*domain.Session, error) {
+func (r *SessionRepository) GetOrCreate(tenantID uint64, sessionID string, clientType domain.ClientType) (*domain.Session, error) {
 	r.mu.RLock()
-	if s, ok := r.cache[sessionID]; ok {
+	if tenantID == domain.TenantIDAll {
+		for key, s := range r.cache {
+			if key.SessionID == sessionID {
+				r.mu.RUnlock()
+				return s, nil
+			}
+		}
+	} else if s, ok := r.cache[sessionCacheKey{TenantID: tenantID, SessionID: sessionID}]; ok {
 		r.mu.RUnlock()
 		return s, nil
 	}
 	r.mu.RUnlock()
 
-	s, err := r.repo.GetBySessionID(sessionID)
+	s, err := r.repo.GetBySessionID(tenantID, sessionID)
 	if err == nil {
 		r.mu.Lock()
-		r.cache[sessionID] = s
+		r.cache[sessionCacheKey{TenantID: s.TenantID, SessionID: s.SessionID}] = s
 		r.mu.Unlock()
 		return s, nil
 	}
@@ -81,7 +100,13 @@ func (r *SessionRepository) GetOrCreate(sessionID string, clientType domain.Clie
 		return nil, err
 	}
 
+	// Reject creation with TenantIDAll — it would store TenantID=0
+	if tenantID == domain.TenantIDAll {
+		return nil, domain.ErrNotFound
+	}
+
 	s = &domain.Session{
+		TenantID:   tenantID,
 		SessionID:  sessionID,
 		ClientType: clientType,
 		ProjectID:  0,
@@ -91,11 +116,11 @@ func (r *SessionRepository) GetOrCreate(sessionID string, clientType domain.Clie
 	}
 
 	r.mu.Lock()
-	r.cache[sessionID] = s
+	r.cache[sessionCacheKey{TenantID: s.TenantID, SessionID: s.SessionID}] = s
 	r.mu.Unlock()
 	return s, nil
 }
 
-func (r *SessionRepository) List() ([]*domain.Session, error) {
-	return r.repo.List()
+func (r *SessionRepository) List(tenantID uint64) ([]*domain.Session, error) {
+	return r.repo.List(tenantID)
 }

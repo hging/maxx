@@ -124,8 +124,8 @@ func (m *TokenAuthMiddleware) ValidateRequest(req *http.Request, clientType doma
 		return nil, ErrInvalidToken
 	}
 
-	// Look up token directly (plaintext comparison)
-	apiToken, err := m.tokenRepo.GetByToken(token)
+	// Look up token across all tenants — tenant identity is determined by the token itself
+	apiToken, err := m.tokenRepo.GetByToken(domain.TenantIDAll, token)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil, ErrInvalidToken
@@ -145,7 +145,7 @@ func (m *TokenAuthMiddleware) ValidateRequest(req *http.Request, clientType doma
 
 	// Update usage (async to not block request)
 	go func() {
-		if err := m.tokenRepo.IncrementUseCount(apiToken.ID); err != nil {
+		if err := m.tokenRepo.IncrementUseCount(apiToken.TenantID, apiToken.ID); err != nil {
 			log.Printf("[TokenAuth] Failed to increment token use count for ID %d: %v", apiToken.ID, err)
 		}
 	}()

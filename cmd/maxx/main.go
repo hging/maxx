@@ -111,6 +111,8 @@ func main() {
 	usageStatsRepo := sqlite.NewUsageStatsRepository(db)
 	responseModelRepo := sqlite.NewResponseModelRepository(db)
 	modelPriceRepo := sqlite.NewModelPriceRepository(db)
+	tenantRepo := sqlite.NewTenantRepository(db)
+	userRepo := sqlite.NewUserRepository(db)
 
 	// Initialize cooldown manager with database persistence
 	cooldown.Default().SetRepository(cooldownRepo)
@@ -233,6 +235,7 @@ func main() {
 		antigravityQuotaRepo,
 		settingRepo,
 		proxyRequestRepo,
+		tenantRepo,
 		wsHub,
 	)
 
@@ -243,6 +246,7 @@ func main() {
 		codexQuotaRepo,
 		settingRepo,
 		proxyRequestRepo,
+		tenantRepo,
 		wsHub,
 	)
 
@@ -256,6 +260,11 @@ func main() {
 		AntigravityTaskSvc: antigravityTaskSvc,
 		CodexTaskSvc:       codexTaskSvc,
 	})
+
+	// Ensure default tenant exists
+	if _, err := tenantRepo.GetDefault(); err != nil {
+		log.Fatalf("Failed to verify default tenant (migration v3 may be missing): %v", err)
+	}
 
 	// Setup log output to broadcast via WebSocket
 	logWriter := handler.NewWebSocketLogWriter(wsHub, os.Stdout, logPath)
@@ -316,7 +325,7 @@ func main() {
 	)
 
 	// Create auth middleware
-	authMiddleware := handler.NewAuthMiddleware()
+	authMiddleware := handler.NewAuthMiddleware(settingRepo, userRepo)
 	if authMiddleware.IsEnabled() {
 		log.Println("Admin API authentication is enabled")
 	} else {
@@ -336,7 +345,8 @@ func main() {
 	proxyHandler := handler.NewProxyHandler(clientAdapter, requestExecutor, cachedSessionRepo, tokenAuthMiddleware)
 	proxyHandler.SetRequestTracker(requestTracker)
 	adminHandler := handler.NewAdminHandler(adminService, backupService, logPath)
-	authHandler := handler.NewAuthHandler(authMiddleware)
+	adminHandler.SetUserRepo(userRepo)
+	authHandler := handler.NewAuthHandler(authMiddleware, userRepo, tenantRepo)
 	antigravityHandler := handler.NewAntigravityHandler(adminService, antigravityQuotaRepo, wsHub)
 	antigravityHandler.SetTaskService(antigravityTaskSvc)
 	kiroHandler := handler.NewKiroHandler(adminService)

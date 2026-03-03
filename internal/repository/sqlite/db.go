@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/awsl-project/maxx/internal/domain"
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -149,6 +150,14 @@ func (d *DB) seedModelMappings() error {
 	}
 
 	return d.gorm.Create(&defaultRules).Error
+}
+
+// tenantScope adds tenant_id filter to query, skipping if tenantID is TenantIDAll
+func tenantScope(db *gorm.DB, tenantID uint64) *gorm.DB {
+	if tenantID == domain.TenantIDAll {
+		return db
+	}
+	return db.Where("tenant_id = ?", tenantID)
 }
 
 // ==================== 时间戳辅助函数 ====================

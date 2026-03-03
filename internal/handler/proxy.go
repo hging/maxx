@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/awsl-project/maxx/internal/adapter/client"
+	maxxctx "github.com/awsl-project/maxx/internal/context"
 	"github.com/awsl-project/maxx/internal/converter"
 	"github.com/awsl-project/maxx/internal/domain"
 	"github.com/awsl-project/maxx/internal/executor"
@@ -148,6 +149,15 @@ func (h *ProxyHandler) ingress(c *flow.Ctx) {
 		}
 	}
 
+	// Determine tenantID from API token or use default
+	var tenantID uint64
+	if apiToken != nil && apiToken.TenantID > 0 {
+		tenantID = apiToken.TenantID
+	} else {
+		tenantID = domain.DefaultTenantID
+	}
+	ctx = maxxctx.WithTenantID(ctx, tenantID)
+
 	requestModel := h.clientAdapter.ExtractModel(r, body, clientType)
 	log.Printf("[Proxy] Extracted model: %s (path: %s)", requestModel, r.URL.Path)
 	sessionID := h.clientAdapter.ExtractSessionID(r, body, clientType)
@@ -172,7 +182,10 @@ func (h *ProxyHandler) ingress(c *flow.Ctx) {
 		}
 	}
 
-	session, _ := h.sessionRepo.GetBySessionID(sessionID)
+	session, sessionErr := h.sessionRepo.GetBySessionID(tenantID, sessionID)
+	if sessionErr != nil {
+		log.Printf("[Proxy] Failed to load session %s: %v", sessionID, sessionErr)
+	}
 	if session != nil {
 		if session.ProjectID > 0 {
 			projectID = session.ProjectID
@@ -187,6 +200,7 @@ func (h *ProxyHandler) ingress(c *flow.Ctx) {
 			log.Printf("[Proxy] Using project ID from token for new session: %d", projectID)
 		}
 		session = &domain.Session{
+			TenantID:   tenantID,
 			SessionID:  sessionID,
 			ClientType: clientType,
 			ProjectID:  projectID,

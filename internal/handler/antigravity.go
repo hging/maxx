@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/awsl-project/maxx/internal/adapter/provider/antigravity"
+	maxxctx "github.com/awsl-project/maxx/internal/context"
 	"github.com/awsl-project/maxx/internal/domain"
 	"github.com/awsl-project/maxx/internal/event"
 	"github.com/awsl-project/maxx/internal/repository"
@@ -125,7 +127,8 @@ func (h *AntigravityHandler) ValidateToken(ctx context.Context, refreshToken str
 
 	// 保存配额到数据库（基于邮箱）
 	if result.Valid && result.UserInfo != nil && result.UserInfo.Email != "" {
-		h.saveQuotaToDB(result.UserInfo.Email, result.UserInfo.Name, result.UserInfo.Picture, result.ProjectID, result.Quota)
+		tenantID := maxxctx.GetTenantID(ctx)
+		h.saveQuotaToDB(tenantID, result.UserInfo.Email, result.UserInfo.Name, result.UserInfo.Picture, result.ProjectID, result.Quota)
 	}
 
 	return result, nil
@@ -145,9 +148,10 @@ func (h *AntigravityHandler) ValidateTokens(ctx context.Context, tokens []string
 	results := antigravity.BatchValidateRefreshTokens(ctx, tokens)
 
 	// 保存每个有效的验证结果到数据库
+	tenantID := maxxctx.GetTenantID(ctx)
 	for _, result := range results {
 		if result.Valid && result.UserInfo != nil && result.UserInfo.Email != "" {
-			h.saveQuotaToDB(result.UserInfo.Email, result.UserInfo.Name, result.UserInfo.Picture, result.ProjectID, result.Quota)
+			h.saveQuotaToDB(tenantID, result.UserInfo.Email, result.UserInfo.Name, result.UserInfo.Picture, result.ProjectID, result.Quota)
 		}
 	}
 
@@ -167,15 +171,19 @@ type OAuthStartResult struct {
 }
 
 // StartOAuth 启动 OAuth 授权流程
-func (h *AntigravityHandler) StartOAuth(redirectURI string) (*OAuthStartResult, error) {
+func (h *AntigravityHandler) StartOAuth(ctx context.Context, redirectURI string) (*OAuthStartResult, error) {
 	// 生成随机 state token
 	state, err := h.oauthManager.GenerateState()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate state: %w", err)
 	}
 
-	// 创建 OAuth 会话
-	h.oauthManager.CreateSession(state)
+	// 创建 OAuth 会话（携带租户 ID，以便回调时使用）
+	tenantID := maxxctx.GetTenantID(ctx)
+	if tenantID == 0 {
+		tenantID = domain.DefaultTenantID
+	}
+	h.oauthManager.CreateSession(state, tenantID)
 
 	// 构建 Google OAuth 授权 URL
 	authURL := antigravity.GetAuthURL(redirectURI, state)
@@ -214,9 +222,12 @@ func (h *AntigravityHandler) handleValidateToken(w http.ResponseWriter, r *http.
 }
 
 // saveQuotaToDB 保存配额到数据库
-func (h *AntigravityHandler) saveQuotaToDB(email, name, picture, projectID string, quota *antigravity.QuotaData) {
+func (h *AntigravityHandler) saveQuotaToDB(tenantID uint64, email, name, picture, gcpProjectID string, quota *antigravity.QuotaData) {
 	if h.quotaRepo == nil || email == "" {
 		return
+	}
+	if tenantID == domain.TenantIDAll {
+		tenantID = domain.DefaultTenantID
 	}
 
 	var models []domain.AntigravityModelQuota
@@ -237,16 +248,19 @@ func (h *AntigravityHandler) saveQuotaToDB(email, name, picture, projectID strin
 	}
 
 	domainQuota := &domain.AntigravityQuota{
+		TenantID:         tenantID,
 		Email:            email,
 		Name:             name,
 		Picture:          picture,
-		GCPProjectID:     projectID,
+		GCPProjectID:     gcpProjectID,
 		SubscriptionTier: subscriptionTier,
 		IsForbidden:      isForbidden,
 		Models:           models,
 	}
 
-	h.quotaRepo.Upsert(domainQuota)
+	if err := h.quotaRepo.Upsert(domainQuota); err != nil {
+		log.Printf("[Antigravity] Failed to save quota for %s: %v", email, err)
+	}
 }
 
 // handleValidateTokens 批量验证 refresh tokens
@@ -286,8 +300,12 @@ func (h *AntigravityHandler) handleValidateTokens(w http.ResponseWriter, r *http
 
 // GetProviderQuota 获取 provider 的配额信息（供 HTTP handler 和 Wails 共用）
 func (h *AntigravityHandler) GetProviderQuota(ctx context.Context, providerID uint64, forceRefresh bool) (*antigravity.QuotaData, error) {
+	tenantID := maxxctx.GetTenantID(ctx)
+	if tenantID == domain.TenantIDAll {
+		tenantID = domain.DefaultTenantID
+	}
 	// 获取 provider
-	provider, err := h.svc.GetProvider(providerID)
+	provider, err := h.svc.GetProvider(tenantID, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("provider not found: %w", err)
 	}
@@ -302,7 +320,7 @@ func (h *AntigravityHandler) GetProviderQuota(ctx context.Context, providerID ui
 
 	// 尝试从数据库获取缓存的配额（如果不是强制刷新）
 	if !forceRefresh && email != "" && h.quotaRepo != nil {
-		cachedQuota, err := h.quotaRepo.GetByEmail(email)
+		cachedQuota, err := h.quotaRepo.GetByEmail(tenantID, email)
 		if err == nil && cachedQuota != nil {
 			// 检查是否过期（10分钟）
 			if time.Since(cachedQuota.UpdatedAt).Seconds() < 600 {
@@ -316,7 +334,7 @@ func (h *AntigravityHandler) GetProviderQuota(ctx context.Context, providerID ui
 	if err != nil {
 		// 如果 API 失败，尝试返回缓存数据
 		if email != "" && h.quotaRepo != nil {
-			cachedQuota, _ := h.quotaRepo.GetByEmail(email)
+			cachedQuota, _ := h.quotaRepo.GetByEmail(tenantID, email)
 			if cachedQuota != nil {
 				return h.domainQuotaToResponse(cachedQuota), nil
 			}
@@ -328,11 +346,11 @@ func (h *AntigravityHandler) GetProviderQuota(ctx context.Context, providerID ui
 	if email != "" && h.quotaRepo != nil {
 		// 尝试保留已有的用户信息
 		var name, picture string
-		if cachedQuota, _ := h.quotaRepo.GetByEmail(email); cachedQuota != nil {
+		if cachedQuota, _ := h.quotaRepo.GetByEmail(tenantID, email); cachedQuota != nil {
 			name = cachedQuota.Name
 			picture = cachedQuota.Picture
 		}
-		h.saveQuotaToDB(email, name, picture, config.ProjectID, quota)
+		h.saveQuotaToDB(tenantID, email, name, picture, config.ProjectID, quota)
 	}
 
 	return quota, nil
@@ -391,8 +409,12 @@ type BatchQuotaResult struct {
 // 优先从数据库返回缓存数据，即使过期也会返回（避免 API 请求阻塞）
 // 配额刷新由后台任务负责
 func (h *AntigravityHandler) GetBatchQuotas(ctx context.Context) (*BatchQuotaResult, error) {
+	tenantID := maxxctx.GetTenantID(ctx)
+	if tenantID == domain.TenantIDAll {
+		tenantID = domain.DefaultTenantID
+	}
 	// 获取所有 providers
-	providers, err := h.svc.GetProviders()
+	providers, err := h.svc.GetProviders(tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list providers: %w", err)
 	}
@@ -412,7 +434,7 @@ func (h *AntigravityHandler) GetBatchQuotas(ctx context.Context) (*BatchQuotaRes
 
 		// 优先从数据库获取缓存的配额（无论是否过期）
 		if email != "" && h.quotaRepo != nil {
-			cachedQuota, err := h.quotaRepo.GetByEmail(email)
+			cachedQuota, err := h.quotaRepo.GetByEmail(tenantID, email)
 			if err == nil && cachedQuota != nil {
 				result.Quotas[provider.ID] = h.domainQuotaToResponse(cachedQuota)
 				continue
@@ -429,11 +451,11 @@ func (h *AntigravityHandler) GetBatchQuotas(ctx context.Context) (*BatchQuotaRes
 		// 保存到数据库
 		if email != "" && h.quotaRepo != nil {
 			var name, picture string
-			if cachedQuota, _ := h.quotaRepo.GetByEmail(email); cachedQuota != nil {
+			if cachedQuota, _ := h.quotaRepo.GetByEmail(tenantID, email); cachedQuota != nil {
 				name = cachedQuota.Name
 				picture = cachedQuota.Picture
 			}
-			h.saveQuotaToDB(email, name, picture, config.ProjectID, quota)
+			h.saveQuotaToDB(tenantID, email, name, picture, config.ProjectID, quota)
 		}
 
 		result.Quotas[provider.ID] = quota
@@ -489,7 +511,7 @@ func (h *AntigravityHandler) handleOAuthStart(w http.ResponseWriter, r *http.Req
 	// 构建回调 URL（使用当前请求的 host）
 	redirectURI := fmt.Sprintf("%s://%s/antigravity/oauth/callback", getScheme(r), r.Host)
 
-	result, err := h.StartOAuth(redirectURI)
+	result, err := h.StartOAuth(r.Context(), redirectURI)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -516,7 +538,8 @@ func (h *AntigravityHandler) handleOAuthCallback(w http.ResponseWriter, r *http.
 		return
 	}
 
-	_ = session // session 可用于将来扩展
+	// 从 OAuth 会话中获取租户 ID
+	tenantID := session.TenantID
 
 	// 构建回调 URL
 	redirectURI := fmt.Sprintf("%s://%s/antigravity/oauth/callback", getScheme(r), r.Host)
@@ -556,7 +579,7 @@ func (h *AntigravityHandler) handleOAuthCallback(w http.ResponseWriter, r *http.
 	}
 
 	// 保存配额到数据库
-	h.saveQuotaToDB(userInfo.Email, userInfo.Name, userInfo.Picture, projectID, quota)
+	h.saveQuotaToDB(tenantID, userInfo.Email, userInfo.Name, userInfo.Picture, projectID, quota)
 
 	// 推送成功结果到前端
 	result := &antigravity.OAuthResult{
