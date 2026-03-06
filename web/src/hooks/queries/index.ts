@@ -170,4 +170,7 @@ export {
   useDeleteUser,
   useApproveUser,
   useChangeMyPassword,
+  usePasskeyCredentials,
+  useDeletePasskeyCredential,
+  useRegisterPasskey,
 } from './use-users';

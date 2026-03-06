@@ -42,8 +42,12 @@ import type {
   ClaudeTokenValidationResult,
   AuthStatus,
   AuthLoginResult,
-  PasskeyOptionsResult,
+  PasskeyRegistrationOptionsResult,
+  PasskeyLoginOptionsResult,
   PasskeyRegisterResult,
+  PasskeyCredential,
+  RegistrationResponseJSON,
+  AuthenticationResponseJSON,
   AuthRegisterResult,
   ApplyResult,
   ChangePasswordResult,
@@ -292,7 +296,11 @@ export class HttpTransport implements Transport {
     return data ?? { items: [], hasMore: false };
   }
 
-  async getProxyRequestsCount(providerId?: number, status?: string, apiTokenId?: number): Promise<number> {
+  async getProxyRequestsCount(
+    providerId?: number,
+    status?: string,
+    apiTokenId?: number,
+  ): Promise<number> {
     const params: Record<string, string> = {};
     if (providerId !== undefined) {
       params.providerId = String(providerId);
@@ -562,7 +570,9 @@ export class HttpTransport implements Transport {
   }
 
   async startClaudeOAuth(): Promise<{ authURL: string; state: string }> {
-    const { data } = await axios.post<{ authURL: string; state: string }>('/api/claude/oauth/start');
+    const { data } = await axios.post<{ authURL: string; state: string }>(
+      '/api/claude/oauth/start',
+    );
     return data;
   }
 
@@ -607,20 +617,24 @@ export class HttpTransport implements Transport {
   }
 
   async login(username: string, password: string): Promise<AuthLoginResult> {
-    const { data } = await axios.post<AuthLoginResult>('/api/admin/auth/login', { username, password });
+    const { data } = await axios.post<AuthLoginResult>('/api/admin/auth/login', {
+      username,
+      password,
+    });
     return data;
   }
 
-  async startPasskeyLogin(username: string): Promise<PasskeyOptionsResult> {
-    const { data } = await axios.post<PasskeyOptionsResult>('/api/admin/auth/passkey/login/options', {
-      username,
-    });
+  async startPasskeyLogin(username: string): Promise<PasskeyLoginOptionsResult> {
+    const { data } = await axios.post<PasskeyLoginOptionsResult>(
+      '/api/admin/auth/passkey/login/options',
+      { username },
+    );
     return data;
   }
 
   async finishPasskeyLogin(
     sessionID: string,
-    credential: Record<string, unknown>,
+    credential: AuthenticationResponseJSON,
   ): Promise<AuthLoginResult> {
     const { data } = await axios.post<AuthLoginResult>('/api/admin/auth/passkey/login/verify', {
       sessionID,
@@ -629,33 +643,45 @@ export class HttpTransport implements Transport {
     return data;
   }
 
-  async startPasskeyRegistration(
-    username: string,
-    password: string,
-  ): Promise<PasskeyOptionsResult> {
-    const { data } = await axios.post<PasskeyOptionsResult>(
-      '/api/admin/auth/passkey/register/options',
-      { username, password },
+  async startPasskeyRegistration(): Promise<PasskeyRegistrationOptionsResult> {
+    const { data } = await this.client.post<PasskeyRegistrationOptionsResult>(
+      '/auth/passkey/register/options',
     );
     return data;
   }
 
   async finishPasskeyRegistration(
     sessionID: string,
-    credential: Record<string, unknown>,
+    credential: RegistrationResponseJSON,
   ): Promise<PasskeyRegisterResult> {
-    const { data } = await axios.post<PasskeyRegisterResult>(
-      '/api/admin/auth/passkey/register/verify',
-      {
-        sessionID,
-        credential,
-      },
+    const { data } = await this.client.post<PasskeyRegisterResult>(
+      '/auth/passkey/register/verify',
+      { sessionID, credential },
     );
     return data;
   }
 
-  async register(username: string, password: string, tenantID?: number): Promise<AuthRegisterResult> {
-    const { data } = await axios.post<AuthRegisterResult>('/api/admin/auth/register', { username, password, tenantID });
+  async listPasskeyCredentials(): Promise<PasskeyCredential[]> {
+    const { data } = await this.client.get<{ success: boolean; credentials?: PasskeyCredential[] }>(
+      '/auth/passkey/credentials',
+    );
+    return data?.credentials ?? [];
+  }
+
+  async deletePasskeyCredential(id: string): Promise<void> {
+    await this.client.delete(`/auth/passkey/credentials/${encodeURIComponent(id)}`);
+  }
+
+  async register(
+    username: string,
+    password: string,
+    tenantID?: number,
+  ): Promise<AuthRegisterResult> {
+    const { data } = await axios.post<AuthRegisterResult>('/api/admin/auth/register', {
+      username,
+      password,
+      tenantID,
+    });
     return data;
   }
 
@@ -665,7 +691,10 @@ export class HttpTransport implements Transport {
   }
 
   async changeMyPassword(oldPassword: string, newPassword: string): Promise<ChangePasswordResult> {
-    const { data } = await this.client.put<ChangePasswordResult>('/auth/password', { oldPassword, newPassword });
+    const { data } = await this.client.put<ChangePasswordResult>('/auth/password', {
+      oldPassword,
+      newPassword,
+    });
     return data;
   }
 

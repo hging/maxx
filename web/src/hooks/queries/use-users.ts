@@ -12,6 +12,7 @@ export const userKeys = {
   list: () => [...userKeys.lists()] as const,
   details: () => [...userKeys.all, 'detail'] as const,
   detail: (id: number) => [...userKeys.details(), id] as const,
+  passkeys: () => [...userKeys.all, 'passkeys'] as const,
 };
 
 export function useUsers() {
@@ -79,5 +80,59 @@ export function useChangeMyPassword() {
   return useMutation({
     mutationFn: ({ oldPassword, newPassword }: { oldPassword: string; newPassword: string }) =>
       getTransport().changeMyPassword(oldPassword, newPassword),
+  });
+}
+
+export function usePasskeyCredentials(enabled = true) {
+  return useQuery({
+    queryKey: userKeys.passkeys(),
+    queryFn: () => getTransport().listPasskeyCredentials(),
+    enabled,
+  });
+}
+
+export function useDeletePasskeyCredential() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => getTransport().deletePasskeyCredential(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: userKeys.passkeys() });
+    },
+  });
+}
+
+export function useRegisterPasskey() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const { startRegistration, browserSupportsWebAuthn } = await import(
+        '@simplewebauthn/browser'
+      );
+      if (!browserSupportsWebAuthn()) {
+        throw new Error('PASSKEY_NOT_SUPPORTED');
+      }
+
+      const transport = getTransport();
+      const beginResult = await transport.startPasskeyRegistration();
+      if (!beginResult.success || !beginResult.sessionID || !beginResult.options) {
+        throw new Error(beginResult.error || 'Failed to start passkey registration');
+      }
+
+      const attResp = await startRegistration({ optionsJSON: beginResult.options! });
+
+      const finishResult = await transport.finishPasskeyRegistration(
+        beginResult.sessionID,
+        attResp,
+      );
+      if (!finishResult.success) {
+        throw new Error(finishResult.error || 'Failed to finish passkey registration');
+      }
+      return finishResult;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: userKeys.passkeys() });
+    },
   });
 }

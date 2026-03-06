@@ -41,8 +41,12 @@ import type {
   ClaudeOAuthResult,
   AuthStatus,
   AuthLoginResult,
-  PasskeyOptionsResult,
+  PasskeyRegistrationOptionsResult,
+  PasskeyLoginOptionsResult,
   PasskeyRegisterResult,
+  PasskeyCredential,
+  RegistrationResponseJSON,
+  AuthenticationResponseJSON,
   AuthRegisterResult,
   ApplyResult,
   ChangePasswordResult,
@@ -191,13 +195,18 @@ export interface Transport {
   // ===== Auth API =====
   getAuthStatus(): Promise<AuthStatus>;
   login(username: string, password: string): Promise<AuthLoginResult>;
-  startPasskeyLogin(username: string): Promise<PasskeyOptionsResult>;
-  finishPasskeyLogin(sessionID: string, credential: Record<string, unknown>): Promise<AuthLoginResult>;
-  startPasskeyRegistration(username: string, password: string): Promise<PasskeyOptionsResult>;
+  startPasskeyLogin(username: string): Promise<PasskeyLoginOptionsResult>;
+  finishPasskeyLogin(
+    sessionID: string,
+    credential: AuthenticationResponseJSON,
+  ): Promise<AuthLoginResult>;
+  startPasskeyRegistration(): Promise<PasskeyRegistrationOptionsResult>;
   finishPasskeyRegistration(
     sessionID: string,
-    credential: Record<string, unknown>,
+    credential: RegistrationResponseJSON,
   ): Promise<PasskeyRegisterResult>;
+  listPasskeyCredentials(): Promise<PasskeyCredential[]>;
+  deletePasskeyCredential(id: string): Promise<void>;
   register(username: string, password: string, tenantID?: number): Promise<AuthRegisterResult>;
   apply(username: string, password: string): Promise<ApplyResult>;
   changeMyPassword(oldPassword: string, newPassword: string): Promise<ChangePasswordResult>;

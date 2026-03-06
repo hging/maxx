@@ -3,6 +3,18 @@
  * 与 Go internal/domain/model.go 保持同步
  */
 
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/browser';
+
+export type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+  RegistrationResponseJSON,
+  AuthenticationResponseJSON,
+} from '@simplewebauthn/browser';
+
 // ===== 基础类型 =====
 
 export type ClientType = 'claude' | 'codex' | 'gemini' | 'openai';
@@ -696,10 +708,17 @@ export interface AuthLoginResult {
   error?: string;
 }
 
-export interface PasskeyOptionsResult {
+export interface PasskeyRegistrationOptionsResult {
   success: boolean;
   sessionID?: string;
-  options?: Record<string, unknown>;
+  options?: PublicKeyCredentialCreationOptionsJSON;
+  error?: string;
+}
+
+export interface PasskeyLoginOptionsResult {
+  success: boolean;
+  sessionID?: string;
+  options?: PublicKeyCredentialRequestOptionsJSON;
   error?: string;
 }
 
@@ -707,6 +726,17 @@ export interface PasskeyRegisterResult {
   success: boolean;
   message?: string;
   error?: string;
+}
+
+export interface PasskeyCredential {
+  id: string;
+  label: string;
+  attachment?: string;
+  transports?: string[];
+  signCount: number;
+  backupEligible: boolean;
+  backupState: boolean;
+  cloneWarning: boolean;
 }
 
 export interface AuthRegisterResult {
