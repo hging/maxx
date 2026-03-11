@@ -9,7 +9,7 @@ interface AdminRouteProps {
 
 export function AdminRoute({ children }: AdminRouteProps) {
   const { t } = useTranslation();
-  const { authEnabled, user, isLoading, isAuthenticated } = useAuth();
+  const { authEnabled, user, isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -19,13 +19,8 @@ export function AdminRoute({ children }: AdminRouteProps) {
     );
   }
 
-  if (authEnabled) {
-    if (!isAuthenticated || !user) {
-      return <Navigate to="/" replace />;
-    }
-    if (user.role !== 'admin') {
-      return <Navigate to="/" replace />;
-    }
+  if (authEnabled && user?.role !== 'admin') {
+    return <Navigate to="/" replace />;
   }
 
   return <>{children}</>;
