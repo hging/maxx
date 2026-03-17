@@ -207,6 +207,15 @@ var migrations = []Migration{
 		Down: func(db *gorm.DB) error {
 			return nil
 		},
+	}, {
+		Version:     7,
+		Description: "Backfill providers.exclude_from_export defaults to 0",
+		Up: func(db *gorm.DB) error {
+			return db.Exec("UPDATE providers SET exclude_from_export = 0 WHERE exclude_from_export IS NULL").Error
+		},
+		Down: func(db *gorm.DB) error {
+			return nil
+		},
 	},
 }
 
