@@ -3,9 +3,11 @@ package sqlite
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	glebarezsqlite "github.com/glebarez/sqlite"
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
@@ -38,13 +40,7 @@ func TestIsMySQLMissingIndexError(t *testing.T) {
 }
 
 func TestDedupeCodexQuotaIdentityRows(t *testing.T) {
-	db, err := NewDBWithDSN("sqlite://:memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	defer db.Close()
-
-	gormDB := db.GormDB()
+	gormDB := openRawSQLiteDB(t)
 	prepareCodexQuotaDedupeFixture(t, gormDB)
 
 	if err := dedupeCodexQuotaIdentityRows(gormDB); err != nil {
@@ -54,19 +50,13 @@ func TestDedupeCodexQuotaIdentityRows(t *testing.T) {
 	assertCodexQuotaFixtureCounts(t, gormDB)
 }
 
-func TestCodexQuotaIdentityMigrationV9Up(t *testing.T) {
-	db, err := NewDBWithDSN("sqlite://:memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	defer db.Close()
-
-	gormDB := db.GormDB()
+func TestCodexQuotaIdentityMigrationV8Up(t *testing.T) {
+	gormDB := openRawSQLiteDB(t)
 	prepareCodexQuotaMigrationFixture(t, gormDB)
 
-	migration := findMigrationByVersion(t, 9)
+	migration := findMigrationByVersion(t, 8)
 	if err := migration.Up(gormDB); err != nil {
-		t.Fatalf("run migration v9 up: %v", err)
+		t.Fatalf("run migration v8 up: %v", err)
 	}
 
 	assertCodexQuotaPostMigrationState(t, gormDB)
@@ -75,18 +65,12 @@ func TestCodexQuotaIdentityMigrationV9Up(t *testing.T) {
 	assertIndexMissing(t, gormDB, "idx_codex_quotas_tenant_email")
 }
 
-func TestCodexQuotaIdentityMigrationV9DownReturnsIrreversibleError(t *testing.T) {
-	db, err := NewDBWithDSN("sqlite://:memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	defer db.Close()
-
-	gormDB := db.GormDB()
+func TestCodexQuotaIdentityMigrationV8DownReturnsIrreversibleError(t *testing.T) {
+	gormDB := openRawSQLiteDB(t)
 	prepareCodexQuotaMigrationFixture(t, gormDB)
 
-	migration := findMigrationByVersion(t, 9)
-	err = migration.Down(gormDB)
+	migration := findMigrationByVersion(t, 8)
+	err := migration.Down(gormDB)
 	if err == nil {
 		t.Fatal("expected irreversible down migration error")
 	}
@@ -98,6 +82,16 @@ func TestCodexQuotaIdentityMigrationV9DownReturnsIrreversibleError(t *testing.T)
 	}
 }
 
+func openRawSQLiteDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := filepath.Join(t.TempDir(), "migrations-test.db")
+	gormDB, err := gorm.Open(glebarezsqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open raw sqlite db: %v", err)
+	}
+	return gormDB
+}
+
 func prepareCodexQuotaDedupeFixture(t *testing.T, gormDB *gorm.DB) {
 	t.Helper()
 	if err := gormDB.Exec(`DROP TABLE IF EXISTS codex_quotas`).Error; err != nil {
@@ -105,23 +99,29 @@ func prepareCodexQuotaDedupeFixture(t *testing.T, gormDB *gorm.DB) {
 	}
 	if err := gormDB.Exec(`
 		CREATE TABLE codex_quotas (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id TEXT PRIMARY KEY,
+			created_at INTEGER DEFAULT 0,
+			updated_at INTEGER DEFAULT 0,
+			deleted_at INTEGER DEFAULT 0,
 			tenant_id INTEGER NOT NULL,
 			identity_key TEXT,
 			email TEXT,
 			account_id TEXT,
-			deleted_at INTEGER DEFAULT 0,
-			updated_at INTEGER DEFAULT 0
+			plan_type TEXT,
+			is_forbidden INTEGER DEFAULT 0,
+			primary_window TEXT,
+			secondary_window TEXT,
+			code_review_window TEXT
 		)
 	`).Error; err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 	inserts := []string{
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (1, 'account:acct-1', 'first@example.com', 'acct-1', 100)`,
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (1, 'account:acct-1', 'second@example.com', 'acct-1', 200)`,
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (1, 'account:acct-2', 'third@example.com', 'acct-2', 150)`,
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (2, 'account:acct-1', 'other-tenant@example.com', 'acct-1', 120)`,
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (1, NULL, 'legacy@example.com', '', 90)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-1', 1, 'account:acct-1', 'first@example.com', 'acct-1', 100)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-2', 1, 'account:acct-1', 'second@example.com', 'acct-1', 200)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-3', 1, 'account:acct-2', 'third@example.com', 'acct-2', 150)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-4', 2, 'account:acct-1', 'other-tenant@example.com', 'acct-1', 120)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-5', 1, NULL, 'legacy@example.com', '', 90)`,
 	}
 	for _, sql := range inserts {
 		if err := gormDB.Exec(sql).Error; err != nil {
@@ -137,13 +137,19 @@ func prepareCodexQuotaMigrationFixture(t *testing.T, gormDB *gorm.DB) {
 	}
 	if err := gormDB.Exec(`
 		CREATE TABLE codex_quotas (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id TEXT PRIMARY KEY,
+			created_at INTEGER DEFAULT 0,
+			updated_at INTEGER DEFAULT 0,
+			deleted_at INTEGER DEFAULT 0,
 			tenant_id INTEGER NOT NULL,
 			identity_key TEXT,
 			email TEXT,
 			account_id TEXT,
-			deleted_at INTEGER DEFAULT 0,
-			updated_at INTEGER DEFAULT 0
+			plan_type TEXT,
+			is_forbidden INTEGER DEFAULT 0,
+			primary_window TEXT,
+			secondary_window TEXT,
+			code_review_window TEXT
 		)
 	`).Error; err != nil {
 		t.Fatalf("create table: %v", err)
@@ -152,11 +158,11 @@ func prepareCodexQuotaMigrationFixture(t *testing.T, gormDB *gorm.DB) {
 		t.Fatalf("create old unique index: %v", err)
 	}
 	inserts := []string{
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (1, NULL, 'first@example.com', 'acct-1', 100)`,
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (1, NULL, 'second@example.com', 'acct-1', 200)`,
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (1, NULL, 'third@example.com', 'acct-2', 150)`,
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (2, NULL, 'other-tenant@example.com', 'acct-1', 120)`,
-		`INSERT INTO codex_quotas (tenant_id, identity_key, email, account_id, updated_at) VALUES (1, NULL, 'legacy@example.com', '', 90)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-1', 1, NULL, 'first@example.com', 'acct-1', 100)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-2', 1, NULL, 'second@example.com', 'acct-1', 200)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-3', 1, NULL, 'third@example.com', 'acct-2', 150)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-4', 2, NULL, 'other-tenant@example.com', 'acct-1', 120)`,
+		`INSERT INTO codex_quotas (id, tenant_id, identity_key, email, account_id, updated_at) VALUES ('row-5', 1, NULL, 'legacy@example.com', '', 90)`,
 	}
 	for _, sql := range inserts {
 		if err := gormDB.Exec(sql).Error; err != nil {
@@ -173,6 +179,14 @@ func assertCodexQuotaFixtureCounts(t *testing.T, gormDB *gorm.DB) {
 	}
 	if duplicateCount != 1 {
 		t.Fatalf("expected duplicate identity rows to collapse to 1, got %d", duplicateCount)
+	}
+
+	var keptEmail string
+	if err := gormDB.Raw(`SELECT email FROM codex_quotas WHERE tenant_id = 1 AND identity_key = 'account:acct-1' LIMIT 1`).Scan(&keptEmail).Error; err != nil {
+		t.Fatalf("fetch kept email: %v", err)
+	}
+	if keptEmail != "second@example.com" {
+		t.Fatalf("expected newest updated_at row to be kept, got %q", keptEmail)
 	}
 
 	var tenant2Count int64
@@ -200,6 +214,14 @@ func assertCodexQuotaPostMigrationState(t *testing.T, gormDB *gorm.DB) {
 	}
 	if duplicateCount != 1 {
 		t.Fatalf("expected migrated duplicate identity rows to collapse to 1, got %d", duplicateCount)
+	}
+
+	var keptEmail string
+	if err := gormDB.Raw(`SELECT email FROM codex_quotas WHERE tenant_id = 1 AND identity_key = 'account:acct-1' LIMIT 1`).Scan(&keptEmail).Error; err != nil {
+		t.Fatalf("fetch kept email: %v", err)
+	}
+	if keptEmail != "second@example.com" {
+		t.Fatalf("expected newest migrated row to be kept, got %q", keptEmail)
 	}
 
 	var tenant2Count int64
